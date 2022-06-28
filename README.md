@@ -1,1 +1,5 @@
-# predictive_modeling_of_kidney_disease
+# Chronic Kidney Disease (CKD) is a serious health burden in the United States, with an estimated fifteen percent of adults being affected, ninety percent of which do not know they have it until it is in its later stages (Centers for Disease Control and Prevention, 2019). CKD involves the gradual loss of function of both kidneys, which filter the blood, leading to an accumulation of toxins and fluid, increasing the risk of stroke and heart attack(Silverstein, 2009). CKD is typically diagnosed by bloodwork, with physician¬s measuring complex readouts of kidney function and determining diagnosis based on individual interpretation. Because most people with CKD are not aware of it, this diagnosis is typically done during routine screenings during annual checkups or unrelated visits. It would be beneficial for clinicians therefore if an algorithm could be developed to automatically flag the presence of CKD in routine medical checkup data.
+
+This project consists of multiple stages of preprocessing, splitting data, modeling, etc. Below shows the workflow of this project.
+
+![Project_life_cycle_503](https://user-images.githubusercontent.com/80921236/176087919-ee7078f1-f567-451f-a57d-cdb991e30c94.jpg)
