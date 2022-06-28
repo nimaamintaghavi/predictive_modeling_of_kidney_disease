@@ -1,0 +1,378 @@
+---
+title: "FinalProj-503"
+author: "Ebad Akhter"
+date: '2022-06-20'
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+library(caret)
+library(RANN)
+library(corrplot)
+library(ggplot2)
+library(naniar)
+library(caretEnsemble)
+library(reshape2)
+```
+
+```{r}
+
+#Read in the dataset
+df_org = read.csv('kidney_disease.csv')
+df = df_org
+  
+
+# Replace the {tab} character (which is unnecessary) with nothing for all records
+for (c in colnames(df)) df[,c] = gsub('\t', '', df[,c])
+
+# Replace Empty values with NA - this will also take care of the records that have question mark (?) as its value.
+for (c in colnames(df)) df[which(!df[,c] >= 0),c] = NA
+
+#Check for NAs
+percent = function(x, digits = 0, format = "f", ...) {
+  paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+}
+
+empty_count_table = data.frame(count = colSums(is.na(df)))
+empty_count_table$percent_empty = percent(empty_count_table$count / nrow(df))
+head(empty_count_table[order(empty_count_table[1], decreasing = TRUE),], 10)
+```
+``` {r}
+#UpSetR package can be used to visualize the patterns of missingness, or rather the combinations of missingness across cases. To see combinations of missingness and intersections of missingness amongst variables, we use the gg_miss_upset function
+
+gg_miss_upset(df, nsets=5)
+
+#This tells us:
+
+#Bottom Left Corner bar plot shows the top 5 features/variables with missing values
+#rbc has the most missing values
+#There is 1 case where all top 5 variables have missing values together
+```
+
+```{r}
+
+cols_numeric = c('age','bp','sg','al','su','bgr','bu','sc','sod','pot','hemo','pcv','wc','rc')
+
+for (c in colnames(df)){
+  if (c %in% cols_numeric) df[,c] = sapply(df[,c], as.numeric)
+  else df[,c] = sapply(df[,c], as.factor)
+} 
+
+```
+
+
+```{r, warning=FALSE}
+#Plots for final
+#Checking relation between features
+
+ggplot(df, aes(classification, age)) + 
+  geom_boxplot(colour = "blue", outlier.colour = "red") +
+  ggtitle("Chronic Kidney Disease based on Age") +
+  xlab("Classification if Disease is present or not") +
+  ylab("Age of the patient in Years") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(df, aes(appet, bp, colour = classification)) + 
+  geom_point(size = 3.5, position = position_dodge(width = 0.5)) +
+  ggtitle("Chronic Kidney Disease based on Appetite and BP") +
+  xlab("Appetite") +
+  ylab("Blood Pressure") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(df, aes(x = sg, pot, colour = classification, width = 0.75, position = "dodge")) +
+  geom_point(size = 2.5, position = position_dodge(width = 0.001)) +
+  ggtitle("Chronic Kidney Disease based on Specific Gravity and Potassium Levels") +
+  xlab("Specific Gravity") +
+  ylab("Potassium Levels") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(df, aes(classification, bp)) + 
+  geom_boxplot(colour = "Blue", outlier.colour = "red") +
+  ggtitle("Chronic Kidney Disease based on Blood Pressure") +
+  xlab("CKD Classification") +
+  ylab("Blood Pressure") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(df, aes(age, sod, colour = classification)) + 
+  geom_point(size = 1.5) +
+  ggtitle("Chronic Kidney Disease based on Age and Sodium Levels in Blood") +
+  xlab("Age") +
+  ylab("Sodium Levels") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(df, aes(classification, su)) + 
+  geom_boxplot(colour = "Blue", outlier.colour = "red") +
+  ggtitle("Chronic Kidney Disease based on Sugar Levels") +
+  xlab("CKD Classification") +
+  ylab("Sugar Levels") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(df, aes(hemo, su, colour = classification, width = 0.75, position = "dodge")) + 
+  geom_point(size = 2.5, position = position_dodge(width = 0.001)) +
+  ggtitle("Chronic Kidney Disease based on Hemoglobin and Sugar Levels") +
+  xlab("Hemoglobin") +
+  ylab("Sugar") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r}
+
+set.seed(110)
+
+cols_with_nearZeroVar = nearZeroVar(df, freqCut = 90/10)
+df = df[,-cols_with_nearZeroVar]
+
+trainingRows = createDataPartition(df$classification, p = .8, list = FALSE) 
+# Subset the data into training and testing.
+trainSet = df[trainingRows, ]
+testSet  = df[-trainingRows, ]
+
+classification_proportion = summary(trainSet$classification)
+
+trainSet_features = subset (trainSet, select = -c(id, ane, sg, hemo, appet, classification))
+
+
+dummy = dummyVars(" ~ .", data=trainSet_features)
+trainSet_features =  data.frame(predict(dummy, newdata = trainSet_features)) 
+
+# Replace missing values using imputation
+bagImpute_model = preProcess(trainSet_features, method = "bagImpute")
+trainSet_features = predict(bagImpute_model, trainSet_features)
+
+highCorr = findCorrelation(cor(trainSet_features), cutoff = .75) # find highly correlated predictors
+trainSet_features = trainSet_features[, -highCorr] # remove highly correlated predictors
+
+# smooth out the extremes
+remove_outliers = function(df, cols) {
+    for (col in cols) {
+        IQR_value = IQR(df[,col])
+        low_side = quantile(unlist(df[,col]), probs = 0.25) - (1.5 * IQR_value)
+        high_side = quantile(unlist(df[,col]), probs = 0.75) + (1.5 * IQR_value)
+        
+        df[which(df[col] <= low_side), col] = low_side
+        df[which(df[col] >= high_side), col] = high_side
+    }
+return (df)
+}
+
+cols_numeric = c('age','bp','al','bgr','bu','sc','sod','pot','wc','rc')
+
+trainSet_features_removed_outliers = remove_outliers(trainSet_features,cols_numeric)
+
+corrplot( cor( trainSet_features ),  #main = "Before Outlier Removal",
+          method = 'square', order = 'AOE', type = 'lower', diag = FALSE,
+         addgrid.col = "gray50", tl.cex=1,
+         tl.col = "black")
+title("Before Outlier Removal", line = 1)
+corrplot( cor( trainSet_features_removed_outliers ), #main = "After Outlier Removal",
+          method = 'square', order = 'AOE', type = 'lower', diag = FALSE,
+          addgrid.col = "gray50", tl.cex=1,
+          tl.col = "black")
+title("After Outlier Removal", line = 1)
+```
+``` {r}
+boxplot(trainSet_features$bgr, trainSet_features_removed_outliers$bgr, col= c("red", "royalblue"),
+        main = ("Blood Glucose Random - Outlier Removal"),
+        names = c("Before Outlier Removal", "After Outlier Removal"),
+        outcol="sienna")
+
+#Removing outliers helps in generalization of data set to avoid over fitting that data. 
+```
+
+``` {r}
+trainSet_features = trainSet_features_removed_outliers
+
+trainSet = cbind(trainSet_features, classification = trainSet$classification)
+```
+
+
+```{r pressure, warning=FALSE, message=FALSE}
+#Stacked Autoencoder Deep Neaural Network
+
+ctrl = trainControl(method = "cv", number=10,
+                  summaryFunction = twoClassSummary,
+                  classProbs = TRUE, savePredictions = TRUE)
+
+# Neural Network
+nnetGrid = expand.grid(decay = c(0, 0.01, .1), size = c(3, 7, 10, 15))
+model_nnet = train(classification ~ ., data = trainSet, method = "nnet",
+                        preProc = c("center", "scale"), tuneGrid = nnetGrid,
+                        trControl = ctrl, trace = FALSE, metric = "ROC",
+                        MaxNWts = 15 * (ncol(trainSet) + 1) + 15 + 1, 
+                        maxit = 1000)
+
+# Linear Discriminant Analysis
+model_lda = train(classification ~ ., data = trainSet, method = "lda", 
+				preProc = c("center", "scale"),
+				metric = "ROC", trControl = ctrl)
+
+# GX Boost
+XGGrid = expand.grid(nrounds = c(1, 20),
+                       max_depth = c(1, 9),
+                       eta = c(.1, .8),
+                       gamma = 0,
+                       colsample_bytree = 1,
+                       min_child_weight = 2,
+                       subsample = c(.5, 1))
+
+
+model_XGBoost = train(classification ~ ., data = trainSet, method = "xgbTree", 
+                             trControl = ctrl,
+                             metric = "ROC", 
+                             preProc = c("center", "scale"),
+                             tuneGrid = XGGrid)
+
+# Stacked Autoencoder Deep Neural Network
+
+DNNTune = expand.grid(layer1 = c(75,150),
+                      layer2 = c(0,75,150), 
+                      layer3 = c(0,75,150),
+                      hidden_dropout = c(0, 0.5), 
+                      visible_dropout = c(0, 0.5))
+
+model_ADNN = train(classification ~ ., data = trainSet,method="dnn",
+                      metric = "ROC", 
+                      tuneGrid=DNNTune, 
+                      trControl= ctrl,
+                      preProc = c("scale", "center"))
+
+
+#Bagged ADA Boost Model 
+
+BADAgrid = expand.grid(mfinal = (1:10), maxdepth = c(1, 10))
+
+model_BADAboost = train(classification ~ ., data = trainSet, method = "AdaBag", 
+                             trControl = ctrl,
+                             tuneGrid = BADAgrid,
+                             metric = "ROC", 
+                             preProc = c("center", "scale"))
+
+
+# Nearest Shrunken Centroids
+
+pamGrid = data.frame(threshold = seq(0, 25, length = 20))
+model_nsc = train(classification ~ ., data=trainSet, method="pam",
+                  preProc = c("center", "scale"), tuneGrid = pamGrid,
+                  metric = "ROC", trControl = ctrl)
+
+
+# Elastic-Net Generalized Linear Model
+glmnGrid = expand.grid(alpha = c(0, .1, .2, .4, .6, .8, 1),
+                       lambda = seq(.01, .2, length = 10))
+
+model_glmn = train(classification ~ ., data = trainSet, method = "glmnet",
+                        preProc = c("center", "scale"), tuneGrid = glmnGrid,
+                        metric = "ROC", trControl = ctrl)
+
+
+# Lasso Generalized Linear Model
+model_glm = train(classification ~ ., data=trainSet, method="glm",
+               metric = "ROC", trControl = ctrl)
+
+
+# Ensemble Model between GLM and GLMNet
+model_list = caretList(classification~., data=trainSet, metric="ROC", 
+                    trControl=ctrl, methodList=c("glm", "glmnet"))
+
+model_ensemble = caretEnsemble(model_list, metric="ROC", trControl=ctrl)
+```
+
+``` {r}
+# Check performance of each model
+
+eval = data.frame(actual = trainSet$classification)
+eval$lda = predict(model_lda, trainSet_features)
+eval$nnet = predict(model_nnet, trainSet_features)
+eval$XGBoost = predict(model_XGBoost, trainSet_features)
+eval$ADNN = predict(model_ADNN, trainSet_features)
+eval$BADAboost = predict(model_BADAboost, trainSet_features)
+eval$nsc = predict(model_nsc, trainSet_features)
+eval$glm = predict(model_glm, trainSet_features)
+eval$glmn = predict(model_glmn, trainSet_features)
+eval$ensemble = predict(model_ensemble, trainSet_features)
+
+
+visualize_confusion_matrix = function (df){
+  for (c in colnames(eval)){
+    cfmx = confusionMatrix(df[,c], df$actual, positive = "ckd")
+    fourfoldplot(cfmx$table, color = c("yellow", "navyblue"),
+                 conf.level = 0, margin = 1, main = paste(c))
+  }
+}
+
+# Check Performance based on Train Data
+visualize_confusion_matrix(eval)
+```
+
+
+```{r}
+#check variable importance for Bagged ADA Boost
+BADAimportance = varImp(model_BADAboost, scale = FALSE)
+plot(BADAimportance, top = 10)
+```
+```{r test, warning=FALSE, message=FALSE}
+dummy = dummyVars(" ~ .", data=testSet)
+testSet_features =  data.frame(predict(dummy, newdata = testSet)) 
+
+testSet_features = testSet_features[colnames(trainSet_features)]
+
+bagImpute_model = preProcess(testSet_features, method = "bagImpute")
+testSet_features = predict(bagImpute_model, testSet_features)
+
+eval_test = data.frame(actual = testSet$classification)
+
+eval_test$lda = predict(model_lda, testSet_features)
+eval_test$nnet = predict(model_nnet, testSet_features)
+eval_test$XGBoost = predict(model_XGBoost, testSet_features)
+eval_test$ADNN = predict(model_ADNN, testSet_features)
+eval_test$BADAboost = predict(model_BADAboost, testSet_features)
+eval_test$nsc = predict(model_nsc, testSet_features)
+eval_test$glm = predict(model_glm, testSet_features)
+eval_test$glmn = predict(model_glmn, testSet_features)
+eval_test$ensemble = predict(model_ensemble, testSet_features)
+
+# Check Performance based on Test Data
+visualize_confusion_matrix(eval_test)
+```
+
+
+```{r}
+# juxtapose performance metric for each model
+# and tabulate for plotting purposes
+tabulate_performance_metrics = function(eval_test){
+  df = data.frame()
+  for (col in colnames(eval_test))
+        {
+        cnfmx = confusionMatrix(eval_test[,col], eval_test$actual, positive = "ckd")
+        last_row = nrow(df)+1
+        for (i in c(1:length(cnfmx$byClass))) {
+              metric = cnfmx$byClass[i]
+              name = unlist(strsplit(deparse(metric),'='))[1]
+              for (str_replace in c('c', '"', ' ' , '(', '\" ')) 
+                  name = sub(str_replace, '', name,fixed = TRUE)
+              
+              df[last_row,'model'] = col
+              df[last_row,name] = round(metric,2)
+              } 
+  }
+  return(df)
+}
+
+performance_table = tabulate_performance_metrics(eval_test)
+
+performance_list_to_show = data.frame(
+  current = c('model','F1','Specificity','Sensitivity','Recall','Precision','BalancedAccuracy'),
+  change_to = c('', 'F1-Measure','Specificity','Sensitivity','Recall','Precision','Accuracy'))
+
+perf_test = melt(performance_table[performance_list_to_show$current],id.vars = 7)
+
+ggplot(perf_test,aes(x = variable, fill = model ,y = value*100)) + 
+  geom_bar(stat = "identity",position = "dodge", color = 'black') + scale_y_log10() +
+  scale_x_discrete(labels = performance_list_to_show$change_to[-1]) + 
+  xlab(NULL) + ylab(NULL) + coord_flip()
+```
